@@ -441,8 +441,14 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     # determines whether we are in the right (rather than left) position along the axis:
     is_right = _indicator(n_dims, i)
 
-    # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right).to(core.int1), y, x)
+    # conditional swap. The two lanes of a pair hold mirrored views (x is own,
+    # y is the partner's), so they must use the same comparison, not a
+    # comparison and its negation: `not (x > y)` and `y > x` disagree exactly
+    # for incomparable pairs (-0.0 vs +0.0, any NaN), where both sides then
+    # decided differently and one element was duplicated while the other was
+    # dropped (#12397).
+    swap = core.where((flip ^ is_right).to(core.int1), y > x, x > y)
+    ret = core.where(swap, y, x)
     return ret
 
 

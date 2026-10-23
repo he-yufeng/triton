@@ -121,6 +121,39 @@ def test_sort(M, N, k, descending, dtype_str, device):
     assert (y == z).all(), (y, z)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize(
+    "row",
+    [
+        [1.0, -0.0, 0.0, -2.0, 5.0, -1.0, 3.0, 4.0],
+        [1.0, float("nan"), 3.0, -2.0, 5.0, -1.0, 0.0, 4.0],
+        [float("nan"), 0.0, -0.0, float("nan"), 2.0, -1.0, 7.0, 3.0],
+    ],
+    ids=["signed-zeros", "nan", "nan-and-zeros"],
+)
+def test_sort_incomparable_pairs_stay_a_permutation(descending, row, device):
+    """A compare-and-swap whose two lanes disagree loses or duplicates an element.
+
+    For a pair that is neither greater nor less (-0.0 vs +0.0, or any NaN) the
+    old per-lane predicate took the partner on one side and kept its own value
+    on the other, so `sort`/`topk`/`bitonic_merge` returned a row that was not a
+    permutation of the input (#12397). The order among incomparable values is
+    unspecified; the output must still be a permutation, checked on the exact
+    bit patterns so -0.0 and +0.0 stay distinguishable.
+    """
+
+    @triton.jit
+    def sort_kernel(X, Z, N: tl.constexpr, descending: tl.constexpr):
+        offs = tl.arange(0, N)
+        tl.store(Z + offs, tl.sort(tl.load(X + offs), descending=descending))
+
+    x = torch.tensor([row], dtype=torch.float32, device=device)
+    z = torch.empty_like(x)
+    sort_kernel[(1, )](x, z, N=x.shape[1], descending=descending)
+    assert torch.equal(z.view(torch.int32).sort().values, x.view(torch.int32).sort().values), (x, z)
+
+
 # ---------------
 # test flip op
 # ---------------
