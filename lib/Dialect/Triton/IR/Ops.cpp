@@ -975,6 +975,14 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   auto retShape = argTy.getShape().vec();
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
+  // The new axis is inserted at position ``axis`` of the source shape, so it must
+  // lie in [0, rank]. An out-of-range value would make the insert below read and
+  // write past the end of ``retShape``, corrupting the heap instead of rejecting
+  // the op with a diagnostic.
+  int64_t rank = static_cast<int64_t>(retShape.size());
+  if (axis < 0 || axis > rank)
+    return emitOptionalError(loc, "axis ", axis,
+                             " out of range for a rank-", rank, " tensor");
   retShape.insert(retShape.begin() + axis, 1);
   // infer encoding
   Attribute argEncoding = argTy.getEncoding();

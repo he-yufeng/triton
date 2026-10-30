@@ -767,3 +767,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @expand_dims_axis_out_of_range(%input: tensor<128xi32>) {
+  // expected-error @+1 {{axis 3 out of range for a rank-1 tensor}}
+  %0 = tt.expand_dims %input {axis = 3 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+  tt.return
+}
