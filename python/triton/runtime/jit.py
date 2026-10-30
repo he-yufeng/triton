@@ -189,7 +189,11 @@ class DependenciesFinder(ast.NodeVisitor):
         if lhs is None or lhs_name in self.supported_modules:
             return None
         ret = getattr(lhs, node.attr, None)
-        self.record_reference(ret)
+        # Record the attribute value with the containing object's dict so a
+        # module or class attribute (e.g. ``cfg.K``) lands in used_global_vals
+        # and is hashed like a global. Without this, two kernels that differ
+        # only in an attribute value share one on-disk cache key (#12429).
+        self.record_reference(ret, getattr(lhs, "__dict__", None), node.attr)
         return ret
 
     def visit_FunctionDef(self, node):

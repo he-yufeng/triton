@@ -198,6 +198,28 @@ def test_toplevel_change():
     assert kernel.cache_key == baseline
 
 
+def test_module_attribute_value_change():
+    # Regression for #12429: two kernels that differ only in a module
+    # attribute value must not share one on-disk cache key. The attribute is
+    # reached through visit_Attribute, so it must be recorded into
+    # used_global_vals like a global for the key to change.
+    import types
+
+    def build(v):
+        cfg = types.ModuleType("cfg")
+        cfg.K = tl.constexpr(v)
+
+        @triton.jit
+        def kernel(o):
+            tl.store(o, cfg.K)
+
+        return kernel
+
+    k1 = build(1)
+    k2 = build(2)
+    assert k1.cache_key != k2.cache_key
+
+
 def test_keyword_only_default_dependency_change():
 
     @triton.jit
