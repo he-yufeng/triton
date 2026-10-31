@@ -1305,3 +1305,17 @@ def test_compute_cache_key_distinguishes_signed_zero_floats():
     assert pos_key == "[('constexpr', 0.0)]opts"
     assert neg_key == "[('constexpr', -0.0)]opts"
     assert compute_cache_key(cache, [("constexpr", -0.0)], _ConstexprKeyOptions()) == neg_key
+
+
+def test_compute_cache_key_does_not_grow_for_nan_constexprs():
+    # NaN never compares equal, so keying floats on their value would miss on
+    # every launch and grow the cache without bound. The bit-pattern key is
+    # what keeps the struct.pack cost on the float path worthwhile: repeated
+    # NaN constexprs collapse onto one entry instead of one per launch.
+    from triton.runtime.jit import compute_cache_key
+
+    cache = {}
+    first = compute_cache_key(cache, [("constexpr", float("nan"))], _ConstexprKeyOptions())
+    second = compute_cache_key(cache, [("constexpr", float("nan"))], _ConstexprKeyOptions())
+    assert first == second
+    assert len(cache) == 1
