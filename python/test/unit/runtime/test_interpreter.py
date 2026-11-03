@@ -94,6 +94,22 @@ def test_fp8_upcast_special_codes(src_dtype, codes, expected):
         assert (np.isnan(got) and np.isnan(want)) or got == want
 
 
+@pytest.mark.parametrize("dst_dtype, expected", [
+    (tl.float8e4nv, [0x7E, 0xFE, 0x7F, 0xFF]),
+    (tl.float8e5, [0x7C, 0xFC, 0x7F, 0xFF]),
+    (tl.float8e4b8, [0x80, 0x80, 0x80, 0x80]),
+    (tl.float8e5b16, [0x80, 0x80, 0x80, 0x80]),
+])
+@pytest.mark.parametrize("rounding", [ir.ROUNDING_MODE.RTNE, ir.ROUNDING_MODE.RTZ])
+def test_fp8_downcast_nonfinite_inputs(dst_dtype, rounding, expected):
+    # Match the FP8 formats' nonfinite encodings rather than treating their
+    # reserved exponent as an ordinary finite binade. Finite overflow handling
+    # is intentionally outside this test's scope.
+    data = np.array([0x7F800000, 0xFF800000, 0x7FC00000, 0xFFC00000], dtype=np.uint32)
+    result = interpreter._convert_float(data, tl.float32, dst_dtype, rounding)
+    np.testing.assert_array_equal(result, np.array(expected, dtype=np.uint8))
+
+
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
     builder = interpreter.InterpreterBuilder()
     data = np.array([0, 0, 1], dtype=np.int32)

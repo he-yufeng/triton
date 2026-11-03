@@ -265,6 +265,17 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         # if the input was NaN but conversion erased all its mantissa bits,
         # set one bit so the output remains NaN.
         significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
+    if output_dtype in (tl.float8e4nv, tl.float8e5):
+        # These formats have explicit nonfinite encodings. Handle only the
+        # nonfinite inputs here; finite overflow keeps its existing behavior.
+        nonfinite = input_nan | input_inf
+        exponent_output[nonfinite] = max_exponent
+        if output_dtype == tl.float8e4nv:
+            significand_output[input_inf] = (1 << output_dtype.fp_mantissa_width) - 2
+            significand_output[input_nan] = (1 << output_dtype.fp_mantissa_width) - 1
+        else:
+            significand_output[input_inf] = 0
+            significand_output[input_nan] = (1 << output_dtype.fp_mantissa_width) - 1
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)
@@ -273,6 +284,10 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         sign_output[zero_output] = 0
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
+    if output_dtype in (tl.float8e4b8, tl.float8e5b16):
+        # FNUZ has no infinity encoding; every nonfinite input uses its sole
+        # NaN representation, the sign bit alone.
+        output[input_nan | input_inf] = 1 << (output_dtype.primitive_bitwidth - 1)
     return output.astype(output_unint_dtype).reshape(input.shape)
 
 
