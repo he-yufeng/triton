@@ -727,3 +727,33 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+def test_autotune_binds_default_arguments_in_cache_key(fresh_knobs):
+    fresh_knobs.runtime.interpret = True
+
+    def prune(configs, named_args, **kwargs):
+        values = {**named_args, **kwargs}
+        mode = 0 if values.get("M", 16) == 32 else 1
+        return [config for config in configs if config.kwargs["MODE"] == mode]
+
+    @triton.autotune(
+        configs=[triton.Config({"MODE": 0}), triton.Config({"MODE": 1})],
+        key=["M", "N"],
+        prune_configs_by={"early_config_prune": prune},
+    )
+    @triton.jit
+    def kernel(out, M: tl.constexpr = 16, N: tl.constexpr = 64, MODE: tl.constexpr = 0):
+        if MODE == 0:
+            tl.static_assert(M == 32)
+        else:
+            tl.static_assert(M == 16)
+        tl.store(out, M + N)
+
+    out = torch.zeros((), dtype=torch.int32)
+    kernel[(1,)](out, 32)
+    assert out.item() == 96
+    kernel[(1,)](out, N=32)
+    assert out.item() == 48
+    assert len(kernel.cache) == 2
+    assert set(kernel.cache) == {(32, 64, "torch.int32"), (16, 32, "torch.int32")}
