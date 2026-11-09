@@ -32,11 +32,11 @@ class HeaderParser:
         import re
 
         # [kernel_name, c signature]
-        self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
+        self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.*):([^:]*)$")
         # [name, hash, suffix]
         self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]*)$")
         # [(type, name)]
-        self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
+        self.c_sig = re.compile("[\\s]*([\\w\\s\\*]+?)\\s+(\\w+)\\s*(?:,|$)")
         # [d|c]
         self.arg_suffix = re.compile("[c,d]")
         # [backend_name]
@@ -92,10 +92,13 @@ class HeaderParser:
                 args.append(arg_name)
             return tys, args
 
+        if not c_sig.strip():
+            return [], []
+
         raise LinkerError(f"{c_sig} is not a valid argument signature")
 
     def _match_suffix(self, suffix: str, c_sig: str):
-        args = c_sig.split(",")
+        args = c_sig.split(",") if c_sig.strip() else []
         s2i = {"c": 1, "d": 16}
         num_specs = 0
         sizes = []
@@ -132,21 +135,32 @@ class HeaderParser:
         self.kernels[name].append(ker)
 
 
+def _join_parameters(parameters):
+    return f"TT_StreamTy stream{', ' if parameters else ''}{parameters}"
+
+
 def gen_signature_with_full_args(m):
-    return ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
+    return _join_parameters(", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)]))
 
 
 def gen_signature(m):
     arg_types = [ty for ty, hint in zip(m.arg_ctypes, m.sizes) if hint != 1]
     arg_names = [arg for arg, hint in zip(m.arg_names, m.sizes) if hint != 1]
-    sig = ", ".join([f"{ty} {arg}" for ty, arg in zip(arg_types, arg_names)])
-    return sig
+    return _join_parameters(", ".join([f"{ty} {arg}" for ty, arg in zip(arg_types, arg_names)]))
+
+
+def _function_parameters(parameters, suffix=""):
+    return f"{parameters}{suffix}"
+
+
+def _call_arguments(arguments, suffix=""):
+    return f"stream{', ' if arguments else ''}{arguments}{suffix}"
 
 
 # generate declarations of kernels with meta-parameter and constant values
 def make_algo_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     return f"""
-TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])});
+TT_ResultTy {name}({_function_parameters(gen_signature_with_full_args(metas[-1]))});
 void load_{name}();
 void unload_{name}();
     """
@@ -155,8 +169,8 @@ void unload_{name}();
 # generate declarations of kernels with meta-parameter and constant values
 def make_global_decl(meta: KernelLinkerMeta) -> str:
     return f"""
-TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)});
-TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id);
+TT_ResultTy {meta.orig_kernel_name}_default({_function_parameters(gen_signature_with_full_args(meta))});
+TT_ResultTy {meta.orig_kernel_name}({_function_parameters(gen_signature_with_full_args(meta), ", int algo_id")});
 void load_{meta.orig_kernel_name}();
 void unload_{meta.orig_kernel_name}();
     """
@@ -164,8 +178,8 @@ void unload_{meta.orig_kernel_name}();
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
-    src = f"TT_ResultTy {meta.orig_kernel_name}_default(TT_StreamTy stream, {gen_signature_with_full_args(meta)}){{\n"
-    src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
+    src = f"TT_ResultTy {meta.orig_kernel_name}_default({_function_parameters(gen_signature_with_full_args(meta))}){{\n"
+    src += f"  return {meta.orig_kernel_name}({_call_arguments(', '.join(meta.arg_names), ', 0')});\n"
     src += "}\n"
     return src
 
@@ -174,10 +188,10 @@ def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
 def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"TT_ResultTy {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(TT_StreamTy stream, {gen_signature(meta)});\n"
+        src += f"TT_ResultTy {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}({_function_parameters(gen_signature(meta))});\n"
     src += "\n"
 
-    src += (f"TT_ResultTy {name}(TT_StreamTy stream, {gen_signature_with_full_args(metas[-1])}){{")
+    src += f"TT_ResultTy {name}({_function_parameters(gen_signature_with_full_args(metas[-1]))}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         cond_fn = (  #
@@ -194,7 +208,7 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
         src += (f"  if ({conds})\n" if any(meta.sizes) else "if (1)\n"
                 )  # Edge case where no specializations hence no dispatching required
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
-        src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
+        src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}({_call_arguments(', '.join(arg_names))});\n"
     src += "\n"
     src += "  return TT_ERROR_INVALID_VALUE;\n"
     src += "}\n"
@@ -213,11 +227,11 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
-    src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+    src = f"TT_ResultTy {meta.orig_kernel_name}({_function_parameters(gen_signature_with_full_args(meta), ', int algo_id')}){{\n"
     src += f"  int num_algos = (int)(sizeof({meta.orig_kernel_name}_kernels) / sizeof({meta.orig_kernel_name}_kernels[0]));\n"
     src += "  if (algo_id < 0 || algo_id >= num_algos)\n"
     src += "    return TT_ERROR_INVALID_VALUE;\n"
-    src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
+    src += f"  return {meta.orig_kernel_name}_kernels[algo_id]({_call_arguments(', '.join(meta.arg_names))});\n"
     src += "}\n"
     return src
 
@@ -225,7 +239,7 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
 # generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
 def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
     # the table of hint dispatchers
-    src = f"typedef TT_ResultTy (*kernel_func_t)(TT_StreamTy stream, {gen_signature_with_full_args(meta)});\n"
+    src = f"typedef TT_ResultTy (*kernel_func_t)({_function_parameters(gen_signature_with_full_args(meta))});\n"
     src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
     for name in names:
         src += f"  {name},\n"
@@ -293,6 +307,9 @@ if __name__ == "__main__":
         h_str = h_path.read_text()
         includes.append(h_path.name)
         parser.extract_linker_meta(h_str)
+
+    if not parser.kernels:
+        raise LinkerError("No kernels were found in the supplied headers")
 
     # generate headers
     algo_decls = [make_algo_decls(name, meta) for name, meta in parser.kernels.items()]

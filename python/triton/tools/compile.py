@@ -175,19 +175,20 @@ def compile_kernel(args: CompileArgs):
     ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
     backend_name = target.backend
 
-    # Build the C parameter list.  When every argument is constexpr the
-    # runtime signature is empty, and the template must not emit a bare
-    # trailing comma (#12507).
-    sig_args = [f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]
-    full_args = [f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]
+    # Build the C parameter list. When every argument is constexpr the
+    # runtime signature is empty, so the templates must not emit a bare comma.
+    sig_args = ["stream"] + [f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]
+    full_args = ["stream"] + [f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]
+    signature = ", ".join(sig_args)
+    full_signature = ", ".join(full_args)
 
     params = {
         "kernel_name": func_name,
         "triton_kernel_name": args.kernel_name,
         "bin_size": len(asm),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ("stream, " if sig_args else "stream") + ", ".join(sig_args),
-        "full_signature": ("stream, " if full_args else "stream") + ", ".join(full_args),
+        "signature": signature,
+        "full_signature": full_signature,
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
         "num_args": len(arg_names_not_1) + 2,  # +2 for global and profile scratch
         "kernel_docstring": doc_string,
